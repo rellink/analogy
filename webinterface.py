@@ -1,0 +1,130 @@
+#! /usr/bin/env python3
+from flask import Flask, request, render_template
+from flask_cors import CORS, cross_origin
+import urllib
+import urllib.request
+import urllib.parse
+import json
+import cgi
+import glob
+import sys
+import argparse
+import os
+from pprint import pformat, pprint
+from analogy_a1 import AIMind
+import os.path
+
+cache = {}
+
+#have to do this because of flask nonsense
+def cache_load(f):
+    try:
+        return cache[f]
+    except:
+        cache[f] = AIMind(filename=f)
+        return cache[f]
+
+data_dir = "./data files/"
+def full_filename(filename):
+    #add path to filename
+    return os.path.join(data_dir, filename)
+
+app = Flask(__name__)
+app.root_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(__file__)
+
+@app.route('/')
+def index():
+    return render_template('index.html', file_list=list_files())
+
+@app.route('/get_analogy', methods=['POST'])
+def get_analogy():
+    #print("file1: ", request.form['file1'])
+    #print("file2: ", request.form['file2'])
+    #print("feature1: ", request.form['feature1'])
+    #print("feature2: ", request.form['feature2'])
+    return json.dumps(cache_load(request.form['file1']).get_analogy(request.form['feature1'],
+                                                                    request.form['feature2'],
+                                                                    cache_load(request.form['file2'])))
+
+@app.route('/find_best_analogy', methods=['POST'])
+def find_best_analogy():
+    return json.dumps(cache_load(request.form['file1']).find_best_analogy(request.form['feature'],
+                                                                          cache_load(request.form['file2'])))
+
+@app.route('/print_analogy', methods=['POST'])
+def print_analogy():
+    x = pformat(cache_load(request.form['file1']).get_analogy(request.form['feature1'],
+                                                      request.form['feature2'],
+                                                      cache_load(request.form['file2'])),
+                indent=4,
+                width=80)
+    if request.form['sanitize'] == "true":
+        x = x.replace("<","&lt;")
+        x = x.replace(">","&gt;")
+    return x
+
+@app.route('/print_best_analogy', methods=['POST'])
+def print_best_analogy():
+    x = pformat(cache_load(request.form['file1']).find_best_analogy(request.form['feature'],
+                                                            cache_load(request.form['file2'])),
+                indent=4,
+                width=80)
+    if request.form['sanitize'] == "true":
+        x = x.replace("<","&lt;")
+        x = x.replace(">","&gt;")
+    return x
+
+def list_files():
+    return [f[13:] for f in glob.glob('./data files/*.xml')]
+
+@app.route('/get_features', methods=['POST'])
+def get_features():
+    f = request.form['file']
+    print("get_features: ", f)
+    return json.dumps(list(cache_load(f).features.keys()))
+
+@app.route('/check_file', methods=['POST'])
+def check_file():
+    #check if a file exists
+    filename = full_filename(request.form['file'])
+    if os.path.isfile(filename):
+        return "true"
+    else:
+        return "false"
+
+@app.route('/add_file', methods=['POST'])
+def add_file():
+    data = request.get_json()
+    filename = full_filename(data['file'])
+
+    #filename = full_filename(request.form['file'])
+    print("adding file: ",filename)
+    #add a file if it doesn't already exist
+    if os.path.isfile(filename):
+        if not data['override'] == "true":
+            print("file %s already exists"%filename)
+            return "File already exists"
+    with open(filename,"wb+") as f:
+        f.write(data["data"].encode("utf-8"))
+    try:
+        cache[f] = AIMind(filename=filename)
+    except:
+        return "Invalid file format"
+    return "File added"
+
+for f in list_files():
+    fname = full_filename(f)
+    try:
+        cache[f] = AIMind(filename=fname)
+    except:
+        print("file %s is corrupt, ignoring"%fname)
+        os.rename(fname, fname + "broken")
+
+print("Files loaded")
+for key in cache.keys():
+    print("\t%s"%key)
+
+CORS(app)
+port = os.getenv('PORT', '5000')
+if __name__ == "__main__":
+	app.run(host='0.0.0.0', port=int(port))
